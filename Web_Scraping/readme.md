@@ -26,11 +26,11 @@ This folder contains Python notebooks and scripts for two primary purposes:
 ```bash
 !pip install requests beautifulsoup4 pandas
 Run the notebook quotes_scraper.ipynb.
-
+```
 Scraped results are saved to quotes_scraped.csv.
 
 2. Car Images Dataset Builder
-Purpose
+### Purpose
 Create a high-quality dataset of car images using free image APIs.
 
 Deduplicate images using SHA256 and perceptual hashing.
@@ -39,56 +39,45 @@ Enforce minimum resolution constraints and filter invalid images.
 
 Save both images and metadata CSV for downstream tasks.
 
-Supported Sources
-Unsplash API
+### Supported Sources
+- Unsplash API
 
-Pexels API
+- Pexels API
 
-Pixabay API
+- Pixabay API
 
-Optional manual URLs
+- Optional manual URLs
 
-Features
-Randomized polite delays between requests.
+### Features
+- Randomized polite delays between requests.
 
-Image deduplication via perceptual hash (pHash) and SHA256.
+- Image deduplication via perceptual hash (pHash) and SHA256.
 
-Automatic JPEG conversion and safe filenames.
+- Automatic JPEG conversion and safe filenames.
 
-Metadata includes: source, URLs, dimensions, file size, hash values.
+- Metadata includes: source, URLs, dimensions, file size, hash values.
 
-Usage
+### Usage
 Install dependencies:
 
-bash
-Copy code
+```bash
 !pip install requests pandas pillow imagehash tqdm
+```
 Update API keys for Unsplash, Pexels, and Pixabay in the notebook.
 
 Run car_image_dataset_builder.ipynb.
 
-Provide:
+#### Provide:
 
-Keyword (e.g., Porsche)
+- Keyword (e.g., Porsche)
 
-Max images per source
+- Max images per source
 
-Max total images to save
+- Max total images to save
 
-Minimum image dimensions
+- Minimum image dimensions
 
-Optional manual URLs
-
-The dataset will be saved under dataset/<keyword>/ with a metadata CSV.
-
-Example Output
-Saved images: dataset/Porsche/Porsche_00001.jpg …
-
-Metadata CSV: dataset/Porsche/Porsche_metadata.csv
-
-Includes information about source, original URL, dimensions, file size, and hashes.
-
-Notes
+# Notes
 Both scrapers are for learning and research purposes only.
 
 Ensure compliance with API usage policies and robots.txt when scraping websites.
