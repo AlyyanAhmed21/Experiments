@@ -1,0 +1,4 @@
+pygame
+psutil
+google-generativeai
+numpy
