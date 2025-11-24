@@ -1,0 +1,18 @@
+name: ai-assistant
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch
+  - pip:
+    - streamlit>=1.30.0
+    - groq>=0.4.0
+    - langsmith>=0.1.0
+    - langchain>=0.1.0
+    - langchain-core>=0.1.0
+    - python-dotenv>=1.0.0
+    - openai>=1.0.0
+    - pydantic>=2.0.0
+    - transformers>=4.30.0
