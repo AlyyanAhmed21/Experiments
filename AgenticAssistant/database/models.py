@@ -23,6 +23,20 @@ class User:
 
 
 @dataclass
+class Session:
+    """Session model for user persistence."""
+    session_id: Optional[str] = None
+    user_id: int = 0
+    token: str = ""
+    expires_at: Optional[str] = None
+    created_at: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
+
+
+@dataclass
 class Conversation:
     """Conversation model."""
     conversation_id: Optional[int] = None
@@ -124,6 +138,17 @@ class DatabaseSchema:
         FOREIGN KEY (user_id) REFERENCES users (user_id)
     )
     """
+
+    CREATE_SESSIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS sessions (
+        session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    """
     
     CREATE_INDEXES = [
         "CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)",
@@ -131,4 +156,6 @@ class DatabaseSchema:
         "CREATE INDEX IF NOT EXISTS idx_memory_user ON memory(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
     ]

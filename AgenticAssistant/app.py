@@ -4,15 +4,17 @@ Multi-Agent AI Personal Assistant - Clean & Simple UI
 import streamlit as st
 from datetime import datetime
 import hashlib
+import time
 from typing import Optional
 
 from config import config
 from database import DatabaseManager
 from agents import Orchestrator
 from utils import voice_utils
+import extra_streamlit_components as stx
 
 
-# Page configuration
+# Page configuration must be the very first command
 st.set_page_config(
     page_title=config.APP_TITLE,
     page_icon=config.APP_ICON,
@@ -26,8 +28,18 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def get_manager():
+    """
+    Initialize Cookie Manager.
+    We use a simplified singleton pattern here to ensure it persists across reruns.
+    """
+    return stx.CookieManager(key="auth_cookie_manager")
+
+
 def initialize_session_state():
-    """Initialize Streamlit session state."""
+    """Initialize Streamlit session state and handle Auto-Login."""
+    
+    # 1. Initialize core state variables
     if 'user' not in st.session_state:
         st.session_state.user = None
     if 'user_id' not in st.session_state:
@@ -38,6 +50,36 @@ def initialize_session_state():
         st.session_state.db_manager = DatabaseManager(config.DATABASE_PATH)
     if 'orchestrator' not in st.session_state:
         st.session_state.orchestrator = Orchestrator(st.session_state.db_manager)
+    
+    # 2. Initialize Cookie Manager
+    # We store it in session state so we can access it in the sidebar later
+    if 'cookie_manager' not in st.session_state:
+        st.session_state.cookie_manager = get_manager()
+
+    # 3. Auto-Login Logic (Check Cookies)
+    # Only check if user is NOT currently logged in
+    if st.session_state.user is None:
+        try:
+            cookie_manager = st.session_state.cookie_manager
+            # get_all() triggers a re-render if cookies are loading
+            cookies = cookie_manager.get_all()
+            
+            if cookies and isinstance(cookies, dict):
+                token = cookies.get('auth_token')
+                
+                if token:
+                    # VALIDATE AGAINST DATABASE
+                    session = st.session_state.db_manager.get_session(token)
+                    
+                    if session:
+                        # Session is valid, log the user in
+                        user = st.session_state.db_manager.get_user_by_id(session.user_id)
+                        if user:
+                            st.session_state.user = user
+                            st.session_state.user_id = user.user_id
+                            load_conversation_history()
+        except Exception as e:
+            print(f"Auto-login check failed (this is normal during startup): {e}")
 
 
 def check_configuration():
@@ -49,21 +91,11 @@ def check_configuration():
         st.markdown("### Please set up your API keys:")
         for error in errors:
             st.markdown(f"- {error}")
-        
-        st.info("💡 **How to fix:**\n\n1. Get a free Groq API key at https://console.groq.com\n2. Get a free LangSmith API key at https://smith.langchain.com\n3. Edit your `.env` file and add the keys")
-        
-        st.code("""
-# Example .env file
-GROQ_API_KEY=gsk_your_actual_key_here
-LANGSMITH_API_KEY=ls_your_actual_key_here
-        """, language="bash")
-        
         st.stop()
 
 
 def login_page():
     """Simple centered login page."""
-    # Center the content
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
@@ -71,7 +103,6 @@ def login_page():
         st.markdown("### Your Personal Multi-Agent Assistant")
         st.markdown("---")
         
-        # Login/Register tabs
         tab1, tab2 = st.tabs(["Login", "Register"])
         
         with tab1:
@@ -83,17 +114,28 @@ def login_page():
                 if username and password:
                     user = st.session_state.db_manager.get_user_by_username(username)
                     
-                    if user:
-                        if st.session_state.db_manager.verify_password(username, hash_password(password)):
-                            st.session_state.user = user
-                            st.session_state.user_id = user.user_id
-                            load_conversation_history()
-                            st.success("✅ Login successful!")
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid password")
+                    if user and st.session_state.db_manager.verify_password(username, hash_password(password)):
+                        # 1. Set Session State
+                        st.session_state.user = user
+                        st.session_state.user_id = user.user_id
+                        
+                        # 2. Create Persistent DB Session
+                        session = st.session_state.db_manager.create_session(user.user_id)
+                        
+                        # 3. Set Cookie
+                        # Expiry set to 30 days
+                        try:
+                            expires = datetime.fromisoformat(session.expires_at)
+                            st.session_state.cookie_manager.set('auth_token', session.token, expires_at=expires, key="set_auth_cookie")
+                        except Exception as e:
+                            print(f"Cookie setting error: {e}")
+                        
+                        load_conversation_history()
+                        st.success("✅ Login successful!")
+                        time.sleep(0.5)
+                        st.rerun()
                     else:
-                        st.error("❌ User not found. Please register first.")
+                        st.error("❌ Invalid username or password")
                 else:
                     st.error("Please fill in all fields")
         
@@ -114,7 +156,7 @@ def login_page():
                         if existing_user:
                             st.error("❌ Username already exists")
                         else:
-                            user = st.session_state.db_manager.create_user(new_username, hash_password(new_password))
+                            st.session_state.db_manager.create_user(new_username, hash_password(new_password))
                             st.success("✅ Account created! Please login.")
                 else:
                     st.error("Please fill in all fields")
@@ -142,33 +184,21 @@ def load_conversation_history():
 
 
 def chat_interface():
-    """Main chat interface."""
     st.title("💬 Chat")
     
-    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-            
-            # Show agent attribution
             if message["role"] == "assistant" and "agent" in message:
-                agent_emoji = {
-                    'chat': '💬',
-                    'productivity': '✅',
-                    'creative': '🎨',
-                    'memory': '🧠'
-                }
+                agent_emoji = {'chat': '💬', 'productivity': '✅', 'creative': '🎨', 'memory': '🧠'}
                 emoji = agent_emoji.get(message["agent"], '🤖')
                 st.caption(f"{emoji} {message['agent'].title()} Agent")
     
-    # Chat input
     if prompt := st.chat_input("Type your message..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
         with st.chat_message("user"):
             st.write(prompt)
         
-        # Get response
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
@@ -176,38 +206,26 @@ def chat_interface():
                         st.session_state.user_id,
                         prompt
                     )
-                    
                     response = result['response']
                     agent_type = result['primary_agent']
                     
                     st.write(response)
-                    
-                    agent_emoji = {
-                        'chat': '💬',
-                        'productivity': '✅',
-                        'creative': '🎨',
-                        'memory': '🧠'
-                    }
+                    agent_emoji = {'chat': '💬', 'productivity': '✅', 'creative': '🎨', 'memory': '🧠'}
                     emoji = agent_emoji.get(agent_type, '🤖')
                     st.caption(f"{emoji} {agent_type.title()} Agent")
                     
-                    # Add to messages
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": response,
                         "agent": agent_type
                     })
-                    
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
-                    st.info("💡 Make sure your Groq API key is valid in the `.env` file")
 
 
 def task_dashboard():
-    """Task management dashboard."""
     st.title("📋 Tasks")
     
-    # Create task
     with st.expander("➕ Create New Task"):
         title = st.text_input("Task Title")
         description = st.text_area("Description (optional)")
@@ -220,28 +238,27 @@ def task_dashboard():
         
         if st.button("Create Task", type="primary"):
             if title:
-                task = st.session_state.db_manager.create_task(
+                st.session_state.db_manager.create_task(
                     user_id=st.session_state.user_id,
                     title=title,
                     description=description,
                     priority=priority,
                     due_date=str(due_date) if due_date else None
                 )
-                st.success(f"✅ Task created: {task.title}")
+                st.success("✅ Task created!")
+                time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("Please enter a task title")
     
     st.markdown("---")
     
-    # Filters
     col1, col2 = st.columns(2)
     with col1:
         status_filter = st.selectbox("Status", ["all", "pending", "in_progress", "completed"])
     with col2:
         priority_filter = st.selectbox("Priority", ["all", "high", "medium", "low"])
     
-    # Get tasks
     tasks = st.session_state.db_manager.get_tasks(
         st.session_state.user_id,
         status=None if status_filter == "all" else status_filter,
@@ -256,17 +273,12 @@ def task_dashboard():
             status_emoji = {'pending': '⏳', 'in_progress': '🔄', 'completed': '✅'}
             
             col1, col2, col3 = st.columns([4, 1, 1])
-            
             with col1:
                 st.markdown(f"**{priority_emoji.get(task.priority, '')} {task.title}**")
-                if task.description:
-                    st.caption(task.description)
-                if task.due_date:
-                    st.caption(f"📅 {task.due_date}")
-            
+                if task.description: st.caption(task.description)
+                if task.due_date: st.caption(f"📅 {task.due_date}")
             with col2:
                 st.write(f"{status_emoji.get(task.status, '')} {task.status}")
-            
             with col3:
                 if task.status == "pending":
                     if st.button("Start", key=f"start_{task.task_id}"):
@@ -276,16 +288,13 @@ def task_dashboard():
                     if st.button("Done", key=f"done_{task.task_id}"):
                         st.session_state.db_manager.update_task_status(task.task_id, "completed")
                         st.rerun()
-                
                 if st.button("🗑️", key=f"del_{task.task_id}"):
                     st.session_state.db_manager.delete_task(task.task_id)
                     st.rerun()
-            
             st.divider()
 
 
 def sidebar():
-    """Sidebar."""
     with st.sidebar:
         st.markdown("# 🤖 AI Assistant")
         
@@ -302,36 +311,46 @@ def sidebar():
                     st.caption("No memories yet")
             
             st.markdown("---")
-            
-            # Navigation
             page = st.radio("Navigation", ["💬 Chat", "📋 Tasks"], label_visibility="collapsed")
-            
             st.markdown("---")
             
-            # Settings
             with st.expander("⚙️ Settings"):
                 st.caption(f"Model: {config.DEFAULT_MODEL}")
-                st.caption(f"Temp: {config.TEMPERATURE}")
-                
-                if voice_utils.stt_available:
-                    st.caption(f"✅ STT: {voice_utils.stt_method}")
-                if voice_utils.tts_available:
-                    st.caption(f"✅ TTS: {voice_utils.tts_method}")
+                if voice_utils.stt_available: st.caption(f"✅ STT: {voice_utils.stt_method}")
+                if voice_utils.tts_available: st.caption(f"✅ TTS: {voice_utils.tts_method}")
             
-            # Logout
-            if st.button("Logout"):
+            # --- SAFE LOGOUT LOGIC ---
+            if st.button("Logout", use_container_width=True):
+                try:
+                    # 1. Get cookies safely
+                    cookies = st.session_state.cookie_manager.get_all()
+                    
+                    if cookies and isinstance(cookies, dict):
+                        # 2. Delete from DB if token exists
+                        token = cookies.get('auth_token')
+                        if token:
+                            st.session_state.db_manager.delete_session(token)
+                        
+                        # 3. Delete from Browser (ONLY if key exists)
+                        if 'auth_token' in cookies:
+                            st.session_state.cookie_manager.delete('auth_token', key="logout_delete")
+                except Exception as e:
+                    # Log error but proceed with logout
+                    print(f"Logout cleanup warning: {e}")
+                
+                # 4. Clear Local Session State (Critical)
                 st.session_state.user = None
                 st.session_state.user_id = None
                 st.session_state.messages = []
+                
+                # 5. Rerun to show login page
                 st.rerun()
             
             return page
-    
     return "💬 Chat"
 
 
 def main():
-    """Main application."""
     initialize_session_state()
     check_configuration()
     
@@ -339,7 +358,6 @@ def main():
         login_page()
     else:
         page = sidebar()
-        
         if page == "💬 Chat":
             chat_interface()
         elif page == "📋 Tasks":

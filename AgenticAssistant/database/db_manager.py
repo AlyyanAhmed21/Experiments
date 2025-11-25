@@ -10,7 +10,7 @@ import json
 from contextlib import contextmanager
 
 from database.models import (
-    User, Conversation, Memory, Task, DatabaseSchema
+    User, Conversation, Memory, Task, Session, DatabaseSchema
 )
 
 
@@ -53,6 +53,7 @@ class DatabaseManager:
             cursor.execute(DatabaseSchema.CREATE_CONVERSATIONS_TABLE)
             cursor.execute(DatabaseSchema.CREATE_MEMORY_TABLE)
             cursor.execute(DatabaseSchema.CREATE_TASKS_TABLE)
+            cursor.execute(DatabaseSchema.CREATE_SESSIONS_TABLE)
             
             # Create indexes
             for index_sql in DatabaseSchema.CREATE_INDEXES:
@@ -97,6 +98,22 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            row = cursor.fetchone()
+            
+            if row:
+                return User(
+                    user_id=row['user_id'],
+                    username=row['username'],
+                    created_at=row['created_at'],
+                    preferences=row['preferences']
+                )
+            return None
+
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """Get user by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             
             if row:
@@ -467,4 +484,64 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            return cursor.rowcount > 0
+
+    # ==================== Session Operations ====================
+
+    def create_session(self, user_id: int, days_valid: int = 30) -> Session:
+        """Create a new session for a user."""
+        import secrets
+        from datetime import timedelta
+        
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now() + timedelta(days=days_valid)).isoformat()
+        
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)",
+                (user_id, token, expires_at)
+            )
+            
+            session_id = cursor.lastrowid
+            cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            
+            return Session(
+                session_id=row['session_id'],
+                user_id=row['user_id'],
+                token=row['token'],
+                expires_at=row['expires_at'],
+                created_at=row['created_at']
+            )
+
+    def get_session(self, token: str) -> Optional[Session]:
+        """Get session by token if valid."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM sessions WHERE token = ?", (token,))
+            row = cursor.fetchone()
+            
+            if row:
+                # Check expiration
+                expires_at = datetime.fromisoformat(row['expires_at'])
+                if expires_at > datetime.now():
+                    return Session(
+                        session_id=row['session_id'],
+                        user_id=row['user_id'],
+                        token=row['token'],
+                        expires_at=row['expires_at'],
+                        created_at=row['created_at']
+                    )
+                else:
+                    # Delete expired session
+                    self.delete_session(token)
+            
+            return None
+
+    def delete_session(self, token: str) -> bool:
+        """Delete a session."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE token = ?", (token,))
             return cursor.rowcount > 0

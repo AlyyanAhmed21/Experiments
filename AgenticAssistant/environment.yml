@@ -16,3 +16,4 @@ dependencies:
     - openai>=1.0.0
     - pydantic>=2.0.0
     - transformers>=4.30.0
+    - extra-streamlit-components>=0.1.0
