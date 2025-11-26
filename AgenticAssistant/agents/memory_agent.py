@@ -39,12 +39,17 @@ class MemoryAgent(BaseAgent):
         # Get all memories
         memories = self.db_manager.get_all_memories(user_id)
         
-        # Format memories for response
+        # Build context for LLM
         if memories:
-            memory_list = "\n".join([f"- {m.key}: {m.value}" for m in memories[:20]])
-            response = f"Here's what I remember about you:\n\n{memory_list}"
+            memory_context = "User Information I have stored:\n"
+            for m in memories[:20]:
+                memory_context += f"- {m.key}: {m.value}\n"
         else:
-            response = "I don't have any stored memories about you yet. As we interact more, I'll learn your preferences!"
+            memory_context = "I don't have any stored information about the user yet."
+        
+        # Use LLM to provide natural response
+        enhanced_message = f"{message}\n\nContext:\n{memory_context}"
+        response = self.create_response(user_id, enhanced_message)
         
         # Save conversation
         self.db_manager.add_conversation(
@@ -55,6 +60,43 @@ class MemoryAgent(BaseAgent):
         )
         
         return response
+    
+    def process_stream(
+        self,
+        user_id: int,
+        message: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Process a memory-related request and stream response.
+        """
+        # Get all memories
+        memories = self.db_manager.get_all_memories(user_id)
+        
+        # Build context for LLM
+        if memories:
+            memory_context = "User Information I have stored:\n"
+            for m in memories[:20]:
+                memory_context += f"- {m.key}: {m.value}\n"
+        else:
+            memory_context = "I don't have any stored information about the user yet."
+        
+        # Use LLM to provide natural response
+        enhanced_message = f"{message}\n\nContext:\n{memory_context}"
+        
+        # Stream response
+        full_response = ""
+        for chunk in self.create_response_stream(user_id, enhanced_message):
+            full_response += chunk
+            yield chunk
+        
+        # Save conversation
+        self.db_manager.add_conversation(
+            user_id=user_id,
+            agent_type=self.agent_name,
+            message=message,
+            response=full_response
+        )
     
     def extract_and_store_memories(
         self,

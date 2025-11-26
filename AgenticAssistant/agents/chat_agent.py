@@ -48,3 +48,34 @@ class ChatAgent(BaseAgent):
         )
         
         return response
+
+    def process_stream(
+        self,
+        user_id: int,
+        message: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Process a chat message and stream the response.
+        
+        Args:
+            user_id: User ID
+            message: User message
+            context: Optional context
+            
+        Yields:
+            Response chunks
+        """
+        # Stream response using base class method
+        full_response = ""
+        for chunk in self.create_response_stream(user_id, message):
+            full_response += chunk
+            yield chunk
+        
+        # Save conversation
+        self.db_manager.add_conversation(
+            user_id=user_id,
+            agent_type=self.agent_name,
+            message=message,
+            response=full_response
+        )

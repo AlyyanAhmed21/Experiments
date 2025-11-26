@@ -49,6 +49,51 @@ class ProductivityAgent(BaseAgent):
         # General productivity advice
         else:
             return self._handle_general_productivity(user_id, message)
+
+    def process_stream(
+        self,
+        user_id: int,
+        message: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Process a productivity message and stream response.
+        """
+        # Check if this is a task creation request
+        if self._is_task_creation(message):
+            # Run sync logic (which saves conversation)
+            response = self._handle_task_creation(user_id, message)
+            yield response
+        
+        # Check if this is a task query
+        elif self._is_task_query(message):
+            # Run sync logic (which saves conversation)
+            response = self._handle_task_query(user_id, message)
+            yield response
+        
+        # General productivity advice
+        else:
+            # Get current tasks for context
+            tasks = self.db_manager.get_tasks(user_id, status='pending')
+            task_context = f"\nUser currently has {len(tasks)} pending tasks."
+            
+            # Stream response
+            full_response = ""
+            for chunk in self.create_response_stream(
+                user_id, 
+                message, 
+                additional_context=task_context
+            ):
+                full_response += chunk
+                yield chunk
+            
+            # Save conversation
+            self.db_manager.add_conversation(
+                user_id=user_id,
+                agent_type=self.agent_name,
+                message=message,
+                response=full_response
+            )
     
     def _is_task_creation(self, message: str) -> bool:
         """Check if message is requesting task creation."""

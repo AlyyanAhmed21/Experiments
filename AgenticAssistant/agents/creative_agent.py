@@ -18,6 +18,7 @@ class CreativeAgent(BaseAgent):
             system_prompt=CREATIVE_AGENT_PROMPT,
             db_manager=db_manager
         )
+        self.active_game = None
     
     def process(
         self,
@@ -36,11 +37,26 @@ class CreativeAgent(BaseAgent):
         Returns:
             Creative response
         """
+        # Load active game state for the user
+        game_state = self.db_manager.get_game_state(user_id)
+        self.active_game = game_state.get('active_game') if game_state else None
+        
         # Determine creative task type
         task_type = self._identify_creative_task(message)
         
+        # Update active game state if user explicitly asks for a game
+        if task_type in ['word_chain', 'riddle', 'hangman', 'word_game']:
+            self.active_game = task_type
+        elif task_type in ['poem', 'story', 'summary', 'report', 'brainstorming', 'general_creative']:
+            # If user switches to a different creative task, clear game state
+            self.active_game = None
+            
         # Add task-specific context
         additional_context = f"Creative task type: {task_type}"
+        if self.active_game:
+            additional_context += f"\nCURRENT ACTIVE GAME: {self.active_game.upper()}. Stick to the rules of this game."
+            if game_state and game_state.get('game_data'):
+                additional_context += f"\nGAME STATE: {game_state['game_data']}"
         
         # Generate creative content
         response = self.create_response(
@@ -55,10 +71,74 @@ class CreativeAgent(BaseAgent):
             agent_type=self.agent_name,
             message=message,
             response=response,
-            metadata={'task_type': task_type}
+            metadata={'task_type': task_type, 'active_game': self.active_game}
         )
         
+        # Persist game state (only active_game)
+        self.db_manager.set_game_state(user_id, {'active_game': self.active_game})
+        
         return response
+        return response
+    
+    def process_stream(
+        self,
+        user_id: int,
+        message: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Any:
+        """
+        Process a creative content request and stream response.
+        
+        Args:
+            user_id: User ID
+            message: User message
+            context: Optional context
+            
+        Yields:
+            Response chunks
+        """
+        # Load active game state for the user
+        game_state = self.db_manager.get_game_state(user_id)
+        self.active_game = game_state.get('active_game') if game_state else None
+        
+        # Determine creative task type
+        task_type = self._identify_creative_task(message)
+        
+        # Update active game state based on user intent
+        if task_type in ['word_chain', 'riddle', 'hangman', 'word_game']:
+            self.active_game = task_type
+        elif task_type in ['poem', 'story', 'summary', 'report', 'brainstorming', 'general_creative']:
+            # Switching to non‑game creative task clears game state
+            self.active_game = None
+            
+        # Add task‑specific context
+        additional_context = f"Creative task type: {task_type}"
+        if self.active_game:
+            additional_context += f"\nCURRENT ACTIVE GAME: {self.active_game.upper()}. Stick to the rules of this game."
+            if game_state and game_state.get('game_data'):
+                additional_context += f"\nGAME STATE: {game_state['game_data']}"
+        
+        # Stream creative content
+        full_response = ""
+        for chunk in self.create_response_stream(
+            user_id,
+            message,
+            additional_context=additional_context
+        ):
+            full_response += chunk
+            yield chunk
+        
+        # Save conversation
+        self.db_manager.add_conversation(
+            user_id=user_id,
+            agent_type=self.agent_name,
+            message=message,
+            response=full_response,
+            metadata={'task_type': task_type, 'active_game': self.active_game}
+        )
+        
+        # Persist game state (only active_game)
+        self.db_manager.set_game_state(user_id, {'active_game': self.active_game})
     
     def _identify_creative_task(self, message: str) -> str:
         """Identify the type of creative task."""
@@ -74,6 +154,14 @@ class CreativeAgent(BaseAgent):
             return 'report'
         elif any(word in message_lower for word in ['brainstorm', 'ideas', 'suggest']):
             return 'brainstorming'
+        elif 'word chain' in message_lower:
+            return 'word_chain'
+        elif 'riddle' in message_lower:
+            return 'riddle'
+        elif 'hangman' in message_lower:
+            return 'hangman'
+        elif any(word in message_lower for word in ['game', 'play']):
+            return 'word_game'
         else:
             return 'general_creative'
     

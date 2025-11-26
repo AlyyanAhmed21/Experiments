@@ -3,6 +3,7 @@ Multi-Agent AI Personal Assistant - Clean & Simple UI
 """
 import streamlit as st
 from datetime import datetime
+import time
 import hashlib
 from typing import Optional
 
@@ -12,19 +13,66 @@ from agents import Orchestrator
 from utils import voice_utils
 
 
-# Page configuration
-st.set_page_config(
-    page_title=config.APP_TITLE,
-    page_icon=config.APP_ICON,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+def main():
+    """Main application entry point."""
+    # Page configuration
+    st.set_page_config(
+        page_title=config.APP_TITLE,
+        page_icon=config.APP_ICON,
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    load_css()
+    
+    # Check configuration
+    check_configuration()
 
 
 def hash_password(password: str) -> str:
     """Hash password using SHA-256."""
     return hashlib.sha256(password.encode()).hexdigest()
 
+def load_css():
+    """Load custom CSS."""
+    st.markdown("""
+        <style>
+        /* Chat Input Styling */
+        .stChatInputContainer {
+            padding-bottom: 20px;
+        }
+        .stChatInputContainer textarea {
+            background-color: #2b313e;
+            color: #ffffff;
+            border: 1px solid #4a4e69;
+            border-radius: 15px;
+        }
+        
+        /* Message Bubbles */
+        .stChatMessage {
+            padding: 1rem;
+            border-radius: 15px;
+            margin-bottom: 10px;
+        }
+        
+        /* User Message (Right Aligned) */
+        div[data-testid="stChatMessage"]:nth-child(odd) {
+            background-color: #2b313e;
+            border: 1px solid #4a4e69;
+        }
+        
+        /* Assistant Message (Left Aligned) */
+        div[data-testid="stChatMessage"]:nth-child(even) {
+            background-color: #1e212b;
+            border: 1px solid #2b313e;
+        }
+        
+        /* Sidebar Styling */
+        section[data-testid="stSidebar"] {
+            background-color: #1a1d24;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
 def initialize_session_state():
     """Initialize Streamlit session state."""
@@ -170,154 +218,67 @@ def chat_interface():
         
         # Get response
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    result = st.session_state.orchestrator.process_message(
-                        st.session_state.user_id,
-                        prompt
-                    )
-                    
-                    response = result['response']
-                    agent_type = result['primary_agent']
-                    
-                    st.write(response)
-                    
-                    agent_emoji = {
-                        'chat': '💬',
-                        'productivity': '✅',
-                        'creative': '🎨',
-                        'memory': '🧠'
-                    }
-                    emoji = agent_emoji.get(agent_type, '🤖')
-                    st.caption(f"{emoji} {agent_type.title()} Agent")
-                    
-                    # Add to messages
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response,
-                        "agent": agent_type
-                    })
-                    
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-                    st.info("💡 Make sure your Groq API key is valid in the `.env` file")
-
-
-def task_dashboard():
-    """Task management dashboard."""
-    st.title("📋 Tasks")
-    
-    # Create task
-    with st.expander("➕ Create New Task"):
-        title = st.text_input("Task Title")
-        description = st.text_area("Description (optional)")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            priority = st.selectbox("Priority", ["low", "medium", "high"], index=1)
-        with col2:
-            due_date = st.date_input("Due Date (optional)", value=None)
-        
-        if st.button("Create Task", type="primary"):
-            if title:
-                task = st.session_state.db_manager.create_task(
-                    user_id=st.session_state.user_id,
-                    title=title,
-                    description=description,
-                    priority=priority,
-                    due_date=str(due_date) if due_date else None
+            caption_placeholder = st.empty()
+            caption_placeholder.caption("Thinking...")
+            
+            try:
+                # Get streaming generator
+                stream_gen = st.session_state.orchestrator.process_message_stream(
+                    st.session_state.user_id,
+                    prompt
                 )
-                st.success(f"✅ Task created: {task.title}")
-                st.rerun()
-            else:
-                st.error("Please enter a task title")
-    
-    st.markdown("---")
-    
-    # Filters
-    col1, col2 = st.columns(2)
-    with col1:
-        status_filter = st.selectbox("Status", ["all", "pending", "in_progress", "completed"])
-    with col2:
-        priority_filter = st.selectbox("Priority", ["all", "high", "medium", "low"])
-    
-    # Get tasks
-    tasks = st.session_state.db_manager.get_tasks(
-        st.session_state.user_id,
-        status=None if status_filter == "all" else status_filter,
-        priority=None if priority_filter == "all" else priority_filter
-    )
-    
-    if not tasks:
-        st.info("No tasks found")
-    else:
-        for task in tasks:
-            priority_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}
-            status_emoji = {'pending': '⏳', 'in_progress': '🔄', 'completed': '✅'}
-            
-            col1, col2, col3 = st.columns([4, 1, 1])
-            
-            with col1:
-                st.markdown(f"**{priority_emoji.get(task.priority, '')} {task.title}**")
-                if task.description:
-                    st.caption(task.description)
-                if task.due_date:
-                    st.caption(f"📅 {task.due_date}")
-            
-            with col2:
-                st.write(f"{status_emoji.get(task.status, '')} {task.status}")
-            
-            with col3:
-                if task.status == "pending":
-                    if st.button("Start", key=f"start_{task.task_id}"):
-                        st.session_state.db_manager.update_task_status(task.task_id, "in_progress")
-                        st.rerun()
-                elif task.status == "in_progress":
-                    if st.button("Done", key=f"done_{task.task_id}"):
-                        st.session_state.db_manager.update_task_status(task.task_id, "completed")
-                        st.rerun()
                 
-                if st.button("🗑️", key=f"del_{task.task_id}"):
-                    st.session_state.db_manager.delete_task(task.task_id)
-                    st.rerun()
-            
-            st.divider()
+                # Handle metadata first (first item is always metadata)
+                metadata = next(stream_gen)
+                agent_type = metadata.get('primary_agent', 'chat')
+                
+                agent_emoji = {'chat': '💬', 'productivity': '✅', 'creative': '🎨', 'memory': '🧠'}
+                emoji = agent_emoji.get(agent_type, '🤖')
+                caption_placeholder.caption(f"{emoji} {agent_type.title()} Agent")
+                
+                # Wrapper to extract content chunks for st.write_stream
+                # and capture full response for history
+                full_response_container = {"text": ""}
+                
+                def content_generator():
+                    for item in stream_gen:
+                        if item['type'] == 'chunk':
+                            full_response_container["text"] += item['content']
+                            # Add a tiny delay for smoother reading effect
+                            time.sleep(0.02)
+                            yield item['content']
+                
+                # Stream the response
+                st.write_stream(content_generator())
+                
+                # Add to messages
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": full_response_container["text"],
+                    "agent": agent_type
+                })
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                st.info("💡 Make sure your Groq API key is valid in the `.env` file")
 
 
 def sidebar():
     """Sidebar."""
     with st.sidebar:
-        st.markdown("# 🤖 AI Assistant")
+        st.title("🤖 AI Assistant")
         
         if st.session_state.user:
-            st.markdown(f"**User:** {st.session_state.user.username}")
+            st.write(f"**User:** {st.session_state.user.username}")
             
-            # Memory
-            memories = st.session_state.db_manager.get_all_memories(st.session_state.user_id)
-            with st.expander(f"🧠 Memories ({len(memories)})"):
-                if memories:
-                    for memory in memories[:5]:
-                        st.caption(f"• {memory.key}: {memory.value}")
-                else:
-                    st.caption("No memories yet")
+            st.divider()
             
+            # User Info Section (instead of empty settings)
+            st.caption("ℹ️ Session Info")
+            st.info(f"Logged in as: {st.session_state.user.username}")
+            
+            # Spacer to push logout to bottom
             st.markdown("---")
-            
-            # Navigation
-            page = st.radio("Navigation", ["💬 Chat", "📋 Tasks"], label_visibility="collapsed")
-            
-            st.markdown("---")
-            
-            # Settings
-            with st.expander("⚙️ Settings"):
-                st.caption(f"Model: {config.DEFAULT_MODEL}")
-                st.caption(f"Temp: {config.TEMPERATURE}")
-                
-                if voice_utils.stt_available:
-                    st.caption(f"✅ STT: {voice_utils.stt_method}")
-                if voice_utils.tts_available:
-                    st.caption(f"✅ TTS: {voice_utils.tts_method}")
-            
             # Logout
             if st.button("Logout"):
                 st.session_state.user = None
@@ -325,9 +286,7 @@ def sidebar():
                 st.session_state.messages = []
                 st.rerun()
             
-            return page
-    
-    return "💬 Chat"
+
 
 
 def main():
@@ -338,12 +297,8 @@ def main():
     if not st.session_state.user:
         login_page()
     else:
-        page = sidebar()
-        
-        if page == "💬 Chat":
-            chat_interface()
-        elif page == "📋 Tasks":
-            task_dashboard()
+        sidebar()
+        chat_interface()
 
 
 if __name__ == "__main__":

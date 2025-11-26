@@ -261,21 +261,18 @@ class DatabaseManager:
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
             cursor.execute(
                 """INSERT INTO memory (user_id, key, value, context)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(user_id, key) 
-                   DO UPDATE SET value=?, context=?, last_updated=CURRENT_TIMESTAMP""",
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(user_id, key)
+                       DO UPDATE SET value=?, context=?, last_updated=CURRENT_TIMESTAMP""",
                 (user_id, key, value, context, value, context)
             )
-            
             cursor.execute(
                 "SELECT * FROM memory WHERE user_id = ? AND key = ?",
                 (user_id, key)
             )
             row = cursor.fetchone()
-            
             return Memory(
                 memory_id=row['memory_id'],
                 user_id=row['user_id'],
@@ -284,6 +281,36 @@ class DatabaseManager:
                 context=row['context'],
                 last_updated=row['last_updated']
             )
+    
+    # ---------------------------------------------------------------------
+    # Game state persistence helpers (used by CreativeAgent)
+    # ---------------------------------------------------------------------
+    def set_game_state(self, user_id: int, state: dict) -> bool:
+        """Store a JSON‑serialised game state for a user.
+
+        The state is saved in the generic ``memory`` table under a reserved
+        key ``__creative_game_state``. Returns ``True`` if the operation
+        succeeded.
+        """
+        import json
+        state_json = json.dumps(state)
+        # Use the existing ``set_memory`` logic – context indicates purpose
+        self.set_memory(user_id, "__creative_game_state", state_json, context="game_state")
+        return True
+
+    def get_game_state(self, user_id: int) -> dict | None:
+        """Retrieve the persisted game state for a user.
+
+        Returns the deserialised ``dict`` or ``None`` if no state is stored.
+        """
+        import json
+        mem = self.get_memory(user_id, "__creative_game_state")
+        if mem and mem.value:
+            try:
+                return json.loads(mem.value)
+            except json.JSONDecodeError:
+                return None
+        return None
     
     def get_memory(self, user_id: int, key: str) -> Optional[Memory]:
         """Get a specific memory entry."""

@@ -2,7 +2,7 @@
 Orchestrator for coordinating multiple agents.
 Analyzes user input and routes to appropriate agent(s).
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Generator
 import json
 
 from agents.base_agent import BaseAgent
@@ -89,6 +89,54 @@ class Orchestrator:
         
         return result
     
+    def process_message_stream(
+        self,
+        user_id: int,
+        message: str
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Process a user message and stream the response.
+        
+        Args:
+            user_id: User ID
+            message: User message
+            
+        Yields:
+            Dictionary with 'chunk' (str) or 'metadata' (dict)
+        """
+        # Determine which agent(s) should handle this
+        routing_decision = self._route_message(user_id, message)
+        
+        primary_agent = routing_decision.get('primary_agent', 'chat')
+        
+        # Yield metadata first
+        yield {
+            'type': 'metadata',
+            'primary_agent': primary_agent,
+            'routing_reasoning': routing_decision.get('reasoning', '')
+        }
+        
+        # Get streaming response from primary agent
+        agent = self.agents.get(primary_agent, self.agents['chat'])
+        
+        full_response = ""
+        try:
+            for chunk in agent.process_stream(user_id, message):
+                if chunk:
+                    full_response += chunk
+                    yield {'type': 'chunk', 'content': chunk}
+        except Exception as e:
+            error_msg = f"Error streaming response: {str(e)}"
+            full_response += error_msg
+            yield {'type': 'chunk', 'content': error_msg}
+        
+        # After streaming is complete, update memories
+        # We do this after yielding all chunks so UI is responsive
+        self._update_memories(user_id, message, full_response)
+        
+        # Yield final completion signal
+        yield {'type': 'complete', 'full_response': full_response}
+    
     def _route_message(
         self,
         user_id: int,
@@ -163,7 +211,8 @@ Respond with JSON:
         
         # Creative keywords
         elif any(word in message_lower for word in [
-            'poem', 'story', 'write', 'create', 'summary', 'brainstorm', 'ideas'
+            'poem', 'story', 'write', 'create', 'summary', 'brainstorm', 'ideas',
+            'joke', 'riddle', 'game', 'play', 'fun'
         ]):
             return {
                 'primary_agent': 'creative',
