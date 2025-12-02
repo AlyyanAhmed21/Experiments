@@ -83,7 +83,10 @@ class BaseAgent(ABC):
             Formatted context string
         """
         # Get recent conversations
-        conversations = self.db_manager.get_conversation_history(user_id, limit=5)
+        conversations = self.db_manager.get_conversation_history(user_id, limit=20)
+        
+        # Trim to prevent context overflow
+        conversations = self._trim_context(conversations)
         
         # Get user memories
         memories = self.db_manager.get_all_memories(user_id)
@@ -108,6 +111,36 @@ class BaseAgent(ABC):
                     context_parts.append(f"Assistant: {conv.response[:200]}...")
         
         return "\n".join(context_parts) if context_parts else "No previous context available."
+    
+    def _trim_context(self, conversations: List) -> List:
+        """
+        Trim conversation history to prevent context overflow.
+        Keeps only the most recent messages to stay under API limits.
+        
+        Args:
+            conversations: List of conversation objects
+            
+        Returns:
+            Trimmed list of conversations
+        """
+        # Keep last 6 conversations (3 user-assistant pairs)
+        # Cerebras has 65K token limit, need to be more conservative
+        MAX_CONVERSATIONS = 6
+        
+        if len(conversations) > MAX_CONVERSATIONS:
+            conversations = conversations[-MAX_CONVERSATIONS:]
+        
+        # Also truncate individual messages to prevent long creative responses
+        # from bloating context
+        MAX_MESSAGE_LENGTH = 1500  # characters per message
+        
+        for conv in conversations:
+            if len(conv.message) > MAX_MESSAGE_LENGTH:
+                conv.message = conv.message[:MAX_MESSAGE_LENGTH] + "..."
+            if len(conv.response) > MAX_MESSAGE_LENGTH:
+                conv.response = conv.response[:MAX_MESSAGE_LENGTH] + "..."
+        
+        return conversations
     
     def create_response(
         self,

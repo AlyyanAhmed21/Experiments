@@ -14,6 +14,13 @@ from database.models import (
 )
 
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_POSTGRES = True
+except ImportError:
+    HAS_POSTGRES = False
+
 class DatabaseManager:
     """Manages all database operations."""
     
@@ -22,18 +29,27 @@ class DatabaseManager:
         Initialize database manager.
         
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (fallback)
         """
+        self.db_url = os.getenv("DATABASE_URL")
         self.db_path = db_path
-        # Ensure data directory exists
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.dialect = 'postgres' if self.db_url and HAS_POSTGRES else 'sqlite'
+        
+        if self.dialect == 'sqlite':
+            # Ensure data directory exists
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            
         self._initialize_database()
     
     @contextmanager
     def get_connection(self):
         """Context manager for database connections."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row  # Enable column access by name
+        if self.dialect == 'postgres':
+            conn = psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            
         try:
             yield conn
             conn.commit()
@@ -42,47 +58,57 @@ class DatabaseManager:
             raise e
         finally:
             conn.close()
+            
+    def execute_query(self, cursor, query: str, params: tuple = ()):
+        """Execute query handling dialect differences."""
+        if self.dialect == 'postgres':
+            # Convert ? to %s for Postgres
+            query = query.replace('?', '%s')
+        cursor.execute(query, params)
+        return cursor
     
     def _initialize_database(self):
         """Create tables and indexes if they don't exist."""
+        schema = DatabaseSchema.get_schema(self.dialect)
+        
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
             # Create tables
-            cursor.execute(DatabaseSchema.CREATE_USERS_TABLE)
-            cursor.execute(DatabaseSchema.CREATE_CONVERSATIONS_TABLE)
-            cursor.execute(DatabaseSchema.CREATE_MEMORY_TABLE)
-            cursor.execute(DatabaseSchema.CREATE_TASKS_TABLE)
+            self.execute_query(cursor, schema['users'])
+            self.execute_query(cursor, schema['conversations'])
+            self.execute_query(cursor, schema['memory'])
+            self.execute_query(cursor, schema['tasks'])
             
             # Create indexes
-            for index_sql in DatabaseSchema.CREATE_INDEXES:
-                cursor.execute(index_sql)
+            for index_sql in schema['indexes']:
+                self.execute_query(cursor, index_sql)
+
     
     # ==================== User Operations ====================
     
     def create_user(self, username: str, password_hash: Optional[str] = None, preferences: Optional[Dict] = None) -> User:
-        """
-        Create a new user.
-        
-        Args:
-            username: Unique username
-            password_hash: Hashed password (SHA-256)
-            preferences: Optional user preferences dictionary
-            
-        Returns:
-            User object with assigned user_id
-        """
+        """Create a new user."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             prefs_json = json.dumps(preferences) if preferences else None
             
-            cursor.execute(
-                "INSERT INTO users (username, password_hash, preferences) VALUES (?, ?, ?)",
-                (username, password_hash, prefs_json)
-            )
+            if self.dialect == 'postgres':
+                self.execute_query(
+                    cursor,
+                    "INSERT INTO users (username, password_hash, preferences) VALUES (?, ?, ?) RETURNING user_id",
+                    (username, password_hash, prefs_json)
+                )
+                user_id = cursor.fetchone()['user_id']
+            else:
+                self.execute_query(
+                    cursor,
+                    "INSERT INTO users (username, password_hash, preferences) VALUES (?, ?, ?)",
+                    (username, password_hash, prefs_json)
+                )
+                user_id = cursor.lastrowid
             
-            user_id = cursor.lastrowid
-            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+            self.execute_query(cursor, "SELECT * FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             
             return User(
@@ -96,7 +122,7 @@ class DatabaseManager:
         """Get user by username."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            self.execute_query(cursor, "SELECT * FROM users WHERE username = ?", (username,))
             row = cursor.fetchone()
             
             if row:
@@ -149,32 +175,31 @@ class DatabaseManager:
         response: str,
         metadata: Optional[Dict] = None
     ) -> Conversation:
-        """
-        Add a conversation entry.
-        
-        Args:
-            user_id: User ID
-            agent_type: Type of agent that handled the conversation
-            message: User's message
-            response: Agent's response
-            metadata: Optional metadata dictionary
-            
-        Returns:
-            Conversation object
-        """
+        """Add a conversation entry."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             metadata_json = json.dumps(metadata) if metadata else None
             
-            cursor.execute(
-                """INSERT INTO conversations 
-                   (user_id, agent_type, message, response, metadata)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user_id, agent_type, message, response, metadata_json)
-            )
+            if self.dialect == 'postgres':
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO conversations 
+                       (user_id, agent_type, message, response, metadata)
+                       VALUES (?, ?, ?, ?, ?) RETURNING conversation_id""",
+                    (user_id, agent_type, message, response, metadata_json)
+                )
+                conv_id = cursor.fetchone()['conversation_id']
+            else:
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO conversations 
+                       (user_id, agent_type, message, response, metadata)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (user_id, agent_type, message, response, metadata_json)
+                )
+                conv_id = cursor.lastrowid
             
-            conv_id = cursor.lastrowid
-            cursor.execute("SELECT * FROM conversations WHERE conversation_id = ?", (conv_id,))
+            self.execute_query(cursor, "SELECT * FROM conversations WHERE conversation_id = ?", (conv_id,))
             row = cursor.fetchone()
             
             return Conversation(
@@ -193,29 +218,21 @@ class DatabaseManager:
         limit: int = 50,
         agent_type: Optional[str] = None
     ) -> List[Conversation]:
-        """
-        Get conversation history for a user.
-        
-        Args:
-            user_id: User ID
-            limit: Maximum number of conversations to retrieve
-            agent_type: Optional filter by agent type
-            
-        Returns:
-            List of Conversation objects
-        """
+        """Get conversation history for a user."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
             if agent_type:
-                cursor.execute(
+                self.execute_query(
+                    cursor,
                     """SELECT * FROM conversations 
                        WHERE user_id = ? AND agent_type = ?
                        ORDER BY timestamp DESC LIMIT ?""",
                     (user_id, agent_type, limit)
                 )
             else:
-                cursor.execute(
+                self.execute_query(
+                    cursor,
                     """SELECT * FROM conversations 
                        WHERE user_id = ?
                        ORDER BY timestamp DESC LIMIT ?""",
@@ -247,28 +264,31 @@ class DatabaseManager:
         value: str,
         context: Optional[str] = None
     ) -> Memory:
-        """
-        Set or update a memory entry.
-        
-        Args:
-            user_id: User ID
-            key: Memory key
-            value: Memory value
-            context: Optional context
-            
-        Returns:
-            Memory object
-        """
+        """Set or update a memory entry."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO memory (user_id, key, value, context)
+            
+            if self.dialect == 'postgres':
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO memory (user_id, key, value, context)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(user_id, key)
+                       DO UPDATE SET value=EXCLUDED.value, context=EXCLUDED.context, last_updated=CURRENT_TIMESTAMP""",
+                    (user_id, key, value, context)
+                )
+            else:
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO memory (user_id, key, value, context)
                        VALUES (?, ?, ?, ?)
                        ON CONFLICT(user_id, key)
                        DO UPDATE SET value=?, context=?, last_updated=CURRENT_TIMESTAMP""",
-                (user_id, key, value, context, value, context)
-            )
-            cursor.execute(
+                    (user_id, key, value, context, value, context)
+                )
+                
+            self.execute_query(
+                cursor,
                 "SELECT * FROM memory WHERE user_id = ? AND key = ?",
                 (user_id, key)
             )
@@ -281,7 +301,7 @@ class DatabaseManager:
                 context=row['context'],
                 last_updated=row['last_updated']
             )
-    
+
     # ---------------------------------------------------------------------
     # Game state persistence helpers (used by CreativeAgent)
     # ---------------------------------------------------------------------
@@ -316,7 +336,8 @@ class DatabaseManager:
         """Get a specific memory entry."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
+            self.execute_query(
+                cursor,
                 "SELECT * FROM memory WHERE user_id = ? AND key = ?",
                 (user_id, key)
             )
@@ -337,7 +358,8 @@ class DatabaseManager:
         """Get all memory entries for a user."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
+            self.execute_query(
+                cursor,
                 "SELECT * FROM memory WHERE user_id = ? ORDER BY last_updated DESC",
                 (user_id,)
             )
@@ -366,30 +388,28 @@ class DatabaseManager:
         priority: str = "medium",
         due_date: Optional[str] = None
     ) -> Task:
-        """
-        Create a new task.
-        
-        Args:
-            user_id: User ID
-            title: Task title
-            description: Optional task description
-            priority: Priority level (low, medium, high)
-            due_date: Optional due date
-            
-        Returns:
-            Task object
-        """
+        """Create a new task."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            cursor.execute(
-                """INSERT INTO tasks (user_id, title, description, priority, due_date)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user_id, title, description, priority, due_date)
-            )
+            if self.dialect == 'postgres':
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO tasks (user_id, title, description, priority, due_date)
+                       VALUES (?, ?, ?, ?, ?) RETURNING task_id""",
+                    (user_id, title, description, priority, due_date)
+                )
+                task_id = cursor.fetchone()['task_id']
+            else:
+                self.execute_query(
+                    cursor,
+                    """INSERT INTO tasks (user_id, title, description, priority, due_date)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (user_id, title, description, priority, due_date)
+                )
+                task_id = cursor.lastrowid
             
-            task_id = cursor.lastrowid
-            cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+            self.execute_query(cursor, "SELECT * FROM tasks WHERE task_id = ?", (task_id,))
             row = cursor.fetchone()
             
             return Task(
@@ -415,12 +435,13 @@ class DatabaseManager:
             
             completed_at = datetime.now().isoformat() if status == "completed" else None
             
-            cursor.execute(
+            self.execute_query(
+                cursor,
                 "UPDATE tasks SET status = ?, completed_at = ? WHERE task_id = ?",
                 (status, completed_at, task_id)
             )
             
-            cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+            self.execute_query(cursor, "SELECT * FROM tasks WHERE task_id = ?", (task_id,))
             row = cursor.fetchone()
             
             if row:
@@ -443,17 +464,7 @@ class DatabaseManager:
         status: Optional[str] = None,
         priority: Optional[str] = None
     ) -> List[Task]:
-        """
-        Get tasks for a user with optional filters.
-        
-        Args:
-            user_id: User ID
-            status: Optional status filter
-            priority: Optional priority filter
-            
-        Returns:
-            List of Task objects
-        """
+        """Get tasks for a user with optional filters."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -470,7 +481,7 @@ class DatabaseManager:
             
             query += " ORDER BY created_at DESC"
             
-            cursor.execute(query, params)
+            self.execute_query(cursor, query, tuple(params))
             rows = cursor.fetchall()
             
             tasks = []
@@ -493,5 +504,5 @@ class DatabaseManager:
         """Delete a task."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            self.execute_query(cursor, "DELETE FROM tasks WHERE task_id = ?", (task_id,))
             return cursor.rowcount > 0

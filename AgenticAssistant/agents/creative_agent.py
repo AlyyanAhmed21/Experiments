@@ -1,7 +1,10 @@
 """
 Creative Agent for generating poems, summaries, and creative content.
+Now with image generation capabilities using Pollinations.ai.
 """
 from typing import Optional, Dict, Any
+import requests
+import urllib.parse
 
 from agents.base_agent import BaseAgent
 from llm.prompts import CREATIVE_AGENT_PROMPT
@@ -65,6 +68,14 @@ class CreativeAgent(BaseAgent):
             additional_context=additional_context
         )
         
+        # Generate image if appropriate
+        if self.should_generate_image(task_type, message):
+            # Extract a concise image prompt from the response
+            image_prompt = self._extract_image_prompt(response, message)
+            if image_prompt:
+                image_embed = self.generate_image(image_prompt)
+                response += image_embed
+        
         # Save conversation
         self.db_manager.add_conversation(
             user_id=user_id,
@@ -77,7 +88,6 @@ class CreativeAgent(BaseAgent):
         # Persist game state (only active_game)
         self.db_manager.set_game_state(user_id, {'active_game': self.active_game})
         
-        return response
         return response
     
     def process_stream(
@@ -127,6 +137,21 @@ class CreativeAgent(BaseAgent):
         ):
             full_response += chunk
             yield chunk
+        
+        # Generate image if appropriate
+        if self.should_generate_image(task_type, message):
+            # Notify user that image generation is starting
+            yield "\n\n🎨 **Generating image locally (this may take a few minutes)...**\n\n"
+            
+            # Extract a concise image prompt from the response
+            image_prompt = self._extract_image_prompt(full_response, message)
+            if image_prompt:
+                image_embed = self.generate_image(image_prompt)
+                full_response += image_embed
+                yield image_embed
+                
+                # Notify completion
+                yield "\n✅ **Image generation complete!**\n"
         
         # Save conversation
         self.db_manager.add_conversation(
@@ -195,3 +220,146 @@ class CreativeAgent(BaseAgent):
             return suggestion
         except:
             return None
+    
+    def generate_image(self, prompt: str) -> str:
+        """
+        Generate an image using local SDXL with fallback to free APIs.
+        Tries: Local SDXL -> Hugging Face -> DeepAI -> Pollinations
+        
+        Args:
+            prompt: Image generation prompt
+            
+        Returns:
+            Markdown image embed or error message
+        """
+        # Try Local SDXL first
+        try:
+            import torch
+            from diffusers import StableDiffusionXLPipeline
+            import base64
+            from io import BytesIO
+
+            print(f"Attempting local generation for: {prompt}")
+            
+            # Load pipeline (will download on first run)
+            import os
+            model_path = os.path.join(os.getcwd(), "models", "sdxl")
+            os.makedirs(model_path, exist_ok=True)
+            
+            print(f"Loading model from: {model_path}")
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                "stabilityai/stable-diffusion-xl-base-1.0", 
+                torch_dtype=torch.float16, 
+                use_safetensors=True, 
+                variant="fp16",
+                cache_dir=model_path
+            )
+            
+            # Move to GPU directly instead of offloading (fixes meta tensor error)
+            pipe.to("cuda")
+            
+            # Generate
+            image = pipe(prompt=prompt, num_inference_steps=30).images[0]
+            
+            # Convert to base64
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            return f"\n\n![Generated Image](data:image/png;base64,{img_str})\n\n*Image generated locally using SDXL for: \"{prompt}\"*"
+            
+        except Exception as e:
+            print(f"Local generation failed: {e}")
+            # Fallthrough to APIs
+        
+        # Try Hugging Face Inference API first (best quality)
+        try:
+            hf_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+            headers = {"Content-Type": "application/json"}
+            payload = {"inputs": prompt}
+            
+            response = requests.post(hf_url, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                # Save image temporarily and return URL
+                import base64
+                image_data = base64.b64encode(response.content).decode()
+                return f"\n\n![Generated Image](data:image/png;base64,{image_data})\n\n*Image generated for: \"{prompt}\"*"
+        except Exception as e:
+            print(f"Hugging Face API failed: {e}")
+        
+        # Try DeepAI as fallback
+        try:
+            deepai_url = "https://api.deepai.org/api/text2img"
+            response = requests.post(
+                deepai_url,
+                data={'text': prompt},
+                headers={'api-key': 'quickstart-QUdJIGlzIGNvbWluZy4uLi4K'},  # Free tier key
+                timeout=30
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if 'output_url' in result:
+                    return f"\n\n![Generated Image]({result['output_url']})\n\n*Image generated for: \"{prompt}\"*"
+        except Exception as e:
+            print(f"DeepAI API failed: {e}")
+        
+        # Final fallback to Pollinations.ai
+        try:
+            encoded_prompt = urllib.parse.quote(prompt)
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            return f"\n\n![Generated Image]({image_url})\n\n*Image generated for: \"{prompt}\"*"
+        except Exception as e:
+            print(f"All image generation APIs failed: {e}")
+            return "\n\n*(Image generation failed)*"
+    
+    def _extract_image_prompt(self, response: str, original_message: str) -> Optional[str]:
+        """Extract a concise image prompt from the user's request."""
+        # Check if user explicitly requested an image
+        message_lower = original_message.lower()
+        has_image_request = any(word in message_lower for word in ['image', 'picture', 'draw', 'illustrate', 'visualize', 'imagine'])
+        
+        # If explicit image request, use the original message (cleaned up)
+        if has_image_request:
+            import re
+            # Remove common command phrases at the start of the message
+            # e.g. "create an image of...", "draw a...", "imagine..."
+            prompt = original_message
+            
+            # Regex to remove starting phrases (case insensitive)
+            # Matches "create", "generate", "draw", "imagine" followed by optional "an image of", "a picture of", etc.
+            pattern = r"^(?:can you\s+)?(?:please\s+)?(?:create|generate|make|draw|illustrate|visualize|imagine)(?:\s+(?:an?|the)\s+(?:image|picture|photo|illustration|drawing|painting)\s+of)?\s*"
+            
+            prompt = re.sub(pattern, "", prompt, flags=re.IGNORECASE)
+            
+            prompt = prompt.strip()
+            
+            # If prompt became empty or too short (e.g. user just said "create image"), use original or try to salvage
+            if len(prompt) < 3:
+                return original_message[:200]
+                
+            # Limit to reasonable length
+            return prompt[:300]
+        
+        # For stories/poems without explicit image request, use the first meaningful line
+        lines = response.split('\n')
+        for line in lines:
+            # Skip headers and empty lines
+            if line.strip() and not line.startswith('#') and len(line) > 20:
+                # Take first meaningful line, limit to 100 chars
+                prompt = line.strip()[:100]
+                return prompt
+        
+        # Fallback to original message
+        return original_message[:200] if len(original_message) > 10 else None
+    
+    def should_generate_image(self, task_type: str, message: str) -> bool:
+        """Determine if an image should be generated for this request."""
+        # Generate images for stories, poems, and creative descriptions
+        image_worthy_tasks = ['story', 'poem', 'general_creative']
+        
+        # Check if user explicitly asks for an image
+        message_lower = message.lower()
+        explicit_request = any(word in message_lower for word in ['image', 'picture', 'draw', 'illustrate', 'visualize', 'imagine'])
+        
+        return task_type in image_worthy_tasks or explicit_request
+

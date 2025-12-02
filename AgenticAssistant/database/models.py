@@ -74,7 +74,9 @@ class Task:
 class DatabaseSchema:
     """SQL schema definitions."""
     
-    CREATE_USERS_TABLE = """
+
+    # SQLite Schema
+    SQLITE_CREATE_USERS_TABLE = """
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -84,7 +86,7 @@ class DatabaseSchema:
     )
     """
     
-    CREATE_CONVERSATIONS_TABLE = """
+    SQLITE_CREATE_CONVERSATIONS_TABLE = """
     CREATE TABLE IF NOT EXISTS conversations (
         conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -97,7 +99,7 @@ class DatabaseSchema:
     )
     """
     
-    CREATE_MEMORY_TABLE = """
+    SQLITE_CREATE_MEMORY_TABLE = """
     CREATE TABLE IF NOT EXISTS memory (
         memory_id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -110,9 +112,61 @@ class DatabaseSchema:
     )
     """
     
-    CREATE_TASKS_TABLE = """
+    SQLITE_CREATE_TASKS_TABLE = """
     CREATE TABLE IF NOT EXISTS tasks (
         task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        priority TEXT DEFAULT 'medium',
+        status TEXT DEFAULT 'pending',
+        due_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    """
+    
+    # PostgreSQL Schema
+    POSTGRES_CREATE_USERS_TABLE = """
+    CREATE TABLE IF NOT EXISTS users (
+        user_id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        preferences TEXT
+    )
+    """
+    
+    POSTGRES_CREATE_CONVERSATIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS conversations (
+        conversation_id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        agent_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        response TEXT NOT NULL,
+        metadata TEXT,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+    """
+    
+    POSTGRES_CREATE_MEMORY_TABLE = """
+    CREATE TABLE IF NOT EXISTS memory (
+        memory_id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        context TEXT,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id),
+        UNIQUE(user_id, key)
+    )
+    """
+    
+    POSTGRES_CREATE_TASKS_TABLE = """
+    CREATE TABLE IF NOT EXISTS tasks (
+        task_id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL,
         title TEXT NOT NULL,
         description TEXT,
@@ -132,3 +186,23 @@ class DatabaseSchema:
         "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
     ]
+    
+    @classmethod
+    def get_schema(cls, dialect: str = 'sqlite') -> Dict[str, str]:
+        """Get schema queries based on dialect."""
+        if dialect == 'postgres':
+            return {
+                'users': cls.POSTGRES_CREATE_USERS_TABLE,
+                'conversations': cls.POSTGRES_CREATE_CONVERSATIONS_TABLE,
+                'memory': cls.POSTGRES_CREATE_MEMORY_TABLE,
+                'tasks': cls.POSTGRES_CREATE_TASKS_TABLE,
+                'indexes': cls.CREATE_INDEXES
+            }
+        else:
+            return {
+                'users': cls.SQLITE_CREATE_USERS_TABLE,
+                'conversations': cls.SQLITE_CREATE_CONVERSATIONS_TABLE,
+                'memory': cls.SQLITE_CREATE_MEMORY_TABLE,
+                'tasks': cls.SQLITE_CREATE_TASKS_TABLE,
+                'indexes': cls.CREATE_INDEXES
+            }

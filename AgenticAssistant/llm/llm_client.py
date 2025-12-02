@@ -35,6 +35,20 @@ class LLMClient:
         self.temperature = config.TEMPERATURE
         self.max_tokens = config.MAX_TOKENS
         
+        # Initialize Cerebras client (fallback) - uses OpenAI-compatible API
+        self.cerebras_api_key = config.CEREBRAS_API_KEY
+        self.cerebras_client = None
+        if self.cerebras_api_key:
+            try:
+                from openai import OpenAI
+                self.cerebras_client = OpenAI(
+                    api_key=self.cerebras_api_key,
+                    base_url="https://api.cerebras.ai/v1"
+                )
+                print("✅ Cerebras (GPT-OSS 120B) fallback enabled")
+            except Exception as e:
+                print(f"⚠️ Cerebras setup failed: {e}")
+        
         # Try to import langsmith for tracing
         self.langsmith_available = False
         try:
@@ -45,6 +59,10 @@ class LLMClient:
                 print("✅ LangSmith tracing enabled")
         except ImportError:
             print("⚠️ LangSmith not available - install with: pip install langsmith")
+        
+        # Print fallback status
+        if not self.cerebras_client:
+            print("⚠️ No LLM fallback configured. Add CEREBRAS_API_KEY to .env for backup when Groq rate limits.")
     
     def chat_completion(
         self,
@@ -114,7 +132,8 @@ class LLMClient:
         max_tokens: Optional[int],
         stream: bool
     ) -> Any:
-        """Raw Groq API call without tracing."""
+        """Raw API call with automatic fallback on rate limits."""
+        # Try Groq first
         try:
             response = self.client.chat.completions.create(
                 model=model,
@@ -127,8 +146,51 @@ class LLMClient:
             return response
             
         except Exception as e:
+            error_str = str(e)
+            
+            # Check if it's a rate limit error (429)
+            if "429" in error_str or "rate_limit" in error_str.lower():
+                print(f"⚠️ Groq rate limit reached. Switching to Cerebras (GPT-OSS 120B)...")
+                
+                # Try Cerebras fallback
+                if self.cerebras_client:
+                    try:
+                        return self._cerebras_completion(messages, temperature, max_tokens, stream)
+                    except Exception as cerebras_error:
+                        cerebras_str = str(cerebras_error)
+                        
+                        print(f"❌ Cerebras failed: {cerebras_error}")
+                        raise Exception(
+                            f"Both providers failed:\n"
+                            f"- Groq: Rate limit (wait ~2 hours)\n"
+                            f"- Cerebras: {cerebras_str}\n\n"
+                            f"Get free Cerebras API key: https://cloud.cerebras.ai/"
+                        )
+                else:
+                    raise Exception(f"Groq rate limit reached and no fallback configured. Please add CEREBRAS_API_KEY to .env or wait 2 hours.")
+            
+            # Not a rate limit error, re-raise
             print(f"Error in chat completion: {e}")
             raise
+   
+    def _cerebras_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        stream: bool
+    ) -> Any:
+        """Call Cerebras API (OpenAI-compatible, uses GPT-OSS 120B)."""
+        # Cerebras uses OpenAI-compatible API - just change base_url
+        response = self.cerebras_client.chat.completions.create(
+            model="gpt-oss-120b",  # 120B parameter model (larger than Llama 70B!)
+            messages=messages,
+            temperature=temperature or self.temperature,
+            max_tokens=max_tokens or self.max_tokens,
+            stream=stream
+        )
+        
+        return response
     
     def get_completion_text(
         self,

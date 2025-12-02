@@ -340,7 +340,7 @@ TEMPERATURE=0.7          # 0.0-1.0 (higher = more creative)
 MAX_TOKENS=2048          # Maximum response length
 
 # Database
-DATABASE_PATH=data/assistant.db
+DATABASE_PATH=postgresql://postgres:alyyan.99@db.hrjjioyqatvxoospsncn.supabase.co:5432/postgres
 
 # Voice Features
 ENABLE_VOICE_INPUT=true   # FREE - local Whisper

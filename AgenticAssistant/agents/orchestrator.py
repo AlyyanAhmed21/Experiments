@@ -10,6 +10,8 @@ from agents.chat_agent import ChatAgent
 from agents.productivity_agent import ProductivityAgent
 from agents.creative_agent import CreativeAgent
 from agents.memory_agent import MemoryAgent
+from agents.researcher_agent import ResearcherAgent
+from agents.knowledge_agent import KnowledgeAgent
 from llm.prompts import ORCHESTRATOR_PROMPT
 from llm.llm_client import llm_client
 from database.db_manager import DatabaseManager
@@ -33,7 +35,9 @@ class Orchestrator:
             'chat': ChatAgent(db_manager),
             'productivity': ProductivityAgent(db_manager),
             'creative': CreativeAgent(db_manager),
-            'memory': MemoryAgent(db_manager)
+            'memory': MemoryAgent(db_manager),
+            'researcher': ResearcherAgent(db_manager),
+            'knowledge': KnowledgeAgent(db_manager)
         }
     
     def process_message(
@@ -164,8 +168,10 @@ Analyze this message and determine which agent should handle it.
 Available agents:
 - chat: Casual conversation, greetings, general questions
 - productivity: Tasks, reminders, scheduling, time management
-- creative: Poems, stories, summaries, brainstorming, creative content
+- creative: Poems, stories, summaries, brainstorming, creative content, image generation
 - memory: Retrieving user information, preferences, past conversations
+- researcher: Real-time web search, current events, fact-checking, latest news
+- knowledge: Questions about uploaded documents (PDFs)
 
 Respond with JSON:
 {{
@@ -212,12 +218,33 @@ Respond with JSON:
         # Creative keywords
         elif any(word in message_lower for word in [
             'poem', 'story', 'write', 'create', 'summary', 'brainstorm', 'ideas',
-            'joke', 'riddle', 'game', 'play', 'fun'
+            'joke', 'riddle', 'game', 'play', 'fun', 'image', 'picture', 'draw'
         ]):
             return {
                 'primary_agent': 'creative',
                 'secondary_agents': [],
                 'reasoning': 'Keyword match for creative'
+            }
+        
+        # Researcher keywords (current events, facts, news)
+        elif any(word in message_lower for word in [
+            'latest', 'current', 'news', 'today', 'now', 'recent', 'search',
+            'who won', 'what happened', 'stock price', 'weather', 'score'
+        ]):
+            return {
+                'primary_agent': 'researcher',
+                'secondary_agents': [],
+                'reasoning': 'Keyword match for researcher'
+            }
+        
+        # Knowledge keywords (document-related)
+        elif any(word in message_lower for word in [
+            'document', 'pdf', 'uploaded', 'file', 'according to'
+        ]):
+            return {
+                'primary_agent': 'knowledge',
+                'secondary_agents': [],
+                'reasoning': 'Keyword match for knowledge'
             }
         
         # Memory keywords

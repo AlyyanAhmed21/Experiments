@@ -15,6 +15,7 @@ class Config:
     
     # API Keys
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    CEREBRAS_API_KEY: str = os.getenv("CEREBRAS_API_KEY", "")  # Fallback provider (GPT-OSS 120B)
     LANGSMITH_API_KEY: str = os.getenv("LANGSMITH_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")  # Optional for voice features
     

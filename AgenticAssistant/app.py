@@ -277,6 +277,33 @@ def sidebar():
             st.caption("ℹ️ Session Info")
             st.info(f"Logged in as: {st.session_state.user.username}")
             
+            st.divider()
+            
+            # Knowledge Base Upload
+            st.caption("📚 Knowledge Base")
+            uploaded_file = st.file_uploader(
+                "Upload PDF Document",
+                type=['pdf'],
+                help="Upload a PDF to query it with the Knowledge Agent"
+            )
+            
+            if uploaded_file is not None:
+                # Save uploaded file temporarily
+                import tempfile
+                import os
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_path = tmp_file.name
+                
+                # Ingest into knowledge agent
+                knowledge_agent = st.session_state.orchestrator.agents['knowledge']
+                status_msg = knowledge_agent.ingest_document(tmp_path, uploaded_file.name)
+                st.success(status_msg)
+                
+                # Clean up temp file
+                os.unlink(tmp_path)
+            
             # Spacer to push logout to bottom
             st.markdown("---")
             # Logout
